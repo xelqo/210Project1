@@ -142,6 +142,31 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     return df[["class_code", "avg_difficulty", "rating", "review", "date"]].reset_index(drop=True)
 
 
+# Editorial rename annotations like "Note: Formerly CS010" — not student reviews.
+ALIAS_RE = re.compile(r"^Note:\s*Formerly\s+([A-Za-z0-9]+)\s*$", re.I)
+
+
+def extract_aliases(records: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, list[str]]]:
+    """Pull "Formerly <CODE>" rename notes out of the reviews.
+
+    These rows carry no opinion or rating, so embedding them as review chunks
+    would only let a content-free note compete for a top-k slot. We drop them as
+    reviews and instead surface the old course code on the class summary chunk,
+    where it actually helps retrieval (a search for the old code hits the class).
+    """
+    aliases: dict[str, list[str]] = {}
+    keep_mask = []
+    for review, code in zip(records["review"], records["class_code"]):
+        m = ALIAS_RE.match(review)
+        if m:
+            aliases.setdefault(code, []).append(m.group(1).upper())
+            keep_mask.append(False)
+        else:
+            keep_mask.append(True)
+    filtered = records[pd.Series(keep_mask, index=records.index)].reset_index(drop=True)
+    return filtered, aliases
+
+
 # --------------------------------------------------------------------------- #
 # 2. Chunking
 # --------------------------------------------------------------------------- #
@@ -215,14 +240,17 @@ def make_review_chunks(rec, tokenizer) -> list[dict]:
     return chunks
 
 
-def make_summary_chunks(records: pd.DataFrame) -> list[dict]:
+def make_summary_chunks(records: pd.DataFrame, aliases: dict[str, list[str]] | None = None) -> list[dict]:
     """One summary chunk per class: code + avg + review count + rating range."""
+    aliases = aliases or {}
     chunks = []
     for code, grp in records.groupby("class_code", sort=True):
         ratings = grp["rating"].dropna()
         avg = grp["avg_difficulty"].dropna()
         avg_val = float(avg.iloc[0]) if len(avg) else (float(ratings.mean()) if len(ratings) else None)
         count = len(grp)
+        alias = aliases.get(code, [])
+        alias_txt = f" Formerly known as {', '.join(alias)}." if alias else ""
 
         prefix = (
             f"[Class: {code} | Class average difficulty: {_fmt_num(avg_val)}/10 | "
@@ -233,12 +261,12 @@ def make_summary_chunks(records: pd.DataFrame) -> list[dict]:
                 f"Summary for {code}: {count} student review(s), "
                 f"average difficulty {_fmt_num(avg_val)} out of 10. "
                 f"Individual difficulty ratings range from {_fmt_num(ratings.min())} "
-                f"to {_fmt_num(ratings.max())} out of 10."
+                f"to {_fmt_num(ratings.max())} out of 10.{alias_txt}"
             )
         else:
             body = (
                 f"Summary for {code}: {count} student review(s), "
-                f"average difficulty {_fmt_num(avg_val)} out of 10."
+                f"average difficulty {_fmt_num(avg_val)} out of 10.{alias_txt}"
             )
         chunks.append({
             "id": f"{code}__summary",
@@ -271,7 +299,9 @@ def main() -> int:
     print(f"Raw rows: {len(df_raw)}")
 
     records = clean(df_raw)
+    records, aliases = extract_aliases(records)
     print(f"Clean review records: {len(records)} across {records['class_code'].nunique()} classes")
+    print(f"Rename notes folded into summaries: {sum(len(v) for v in aliases.values())}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     records_path = OUT_DIR / "records.csv"
@@ -284,7 +314,7 @@ def main() -> int:
     review_chunks: list[dict] = []
     for rec in records.itertuples():
         review_chunks.extend(make_review_chunks(rec, tokenizer))
-    summary_chunks = make_summary_chunks(records)
+    summary_chunks = make_summary_chunks(records, aliases)
     all_chunks = review_chunks + summary_chunks
 
     chunks_path = OUT_DIR / "chunks.jsonl"
