@@ -15,8 +15,7 @@ The domain I choose is course difficulty at UCR. This kind of thing is hard to c
 
 ## Documents
 
-<!-- List your specific sources: URLs, subreddit names, forum threads, or file descriptions.
-     Aim for at least 10 sources that together cover different subtopics or perspectives within your domain. -->
+https://docs.google.com/spreadsheets/d/1qiy_Oi8aFiPmL4QSTR3zHe74kmvc6e_159L1mAUUlU0/edit?usp=sharing
 
 | # | Source | Description | URL or location |
 |---|--------|-------------|-----------------|
@@ -41,57 +40,103 @@ The domain I choose is course difficulty at UCR. This kind of thing is hard to c
      A review-heavy corpus warrants different chunking than a long FAQ. -->
 
 **Chunk size:**
+One review per chunk (row-based, not fixed-length).
+- Cap each chunk at ~256 tokens (≈1,000 chars) to match all-MiniLM-L6-v2's max
+  sequence length (it truncates beyond 256 tokens).
+- Split only the rare essay-length reviews that exceed the cap; use ~40-token
+  overlap within those splits.
 
 **Overlap:**
+ Zero overlap between separate reviews — they're independent and overlap would just bleed one class's review into another's. Use ~40-token overlap only when you're forced to split one oversized review, so a thought spanning the split stays retrievable in at least one piece.
 
 **Reasoning:**
-
+The corpus is a structured set of independent reviews, each tied to a single class with a numeric difficulty and date. Each review is the natural atomic unit, so I chunk per-review rather than by fixed length. Fixed-length chunking would both fragment long reviews and conflate unrelated short ones from different classes. The ~256-token cap matches the embedding model's max sequence length (all-MiniLM-L6-v2 truncates at 256 tokens), so larger chunks would silently lose text anyway. Overlap is unnecessary between independent reviews and only applied within split long reviews
 ---
 
 ## Retrieval Approach
 
-<!-- Which embedding model are you using (e.g., all-MiniLM-L6-v2 via sentence-transformers)?
-     How many chunks will you retrieve per query (top-k)?
-     If you were deploying this for real users and cost wasn't a constraint, what tradeoffs
-     would you weigh in choosing a different embedding model — context length, multilingual
-     support, accuracy on domain-specific text, latency? -->
+**Embedding model:** all-MiniLM-L6-v2 via sentence-transformers. Chosen because
+it runs locally (no API cost/key), is fast, and 384-dim vectors are cheap to
+store/search for a corpus this size. It's English-only and truncates at 256
+tokens — acceptable since reviews are English and chunks are capped at 256.
 
-**Embedding model:**
+**top-k:** 6. A single class can have many reviews spanning the full 0–10 range
+(e.g. BIOL005A, CHEM001A), so one or two chunks would capture only a slice of a
+divided opinion. ~6 gives the LLM enough perspectives to summarize consensus and
+spread. Too few → misses contradicting reviews, answer looks falsely confident.
+Too many (e.g. 20) → dilutes with off-topic/other-class reviews, bloats the
+prompt, and can bury the relevant chunk. I'll also filter by class-code metadata
+when the query names a specific class, so top-k pulls from the right class
+instead of semantically-similar reviews of other classes.
 
-**Top-k:**
+**If deploying for real (cost no object):** I'd weigh:
+- *Context length* — a longer-context model (e.g. OpenAI text-embedding-3-large,
+  ~8k tokens) wouldn't truncate the essay-length reviews MiniLM cuts at 256.
+- *Domain/accuracy* — reviews are informal, sarcastic, slang-heavy ("weeder
+  class," "got Jeff'd," "destroyed my GPA"). A larger model captures connotation
+  and sarcasm better, improving retrieval on opinion text.
+- *Multilingual* — not needed here; the corpus is English. I'd skip multilingual
+  models since they trade some English accuracy for languages I don't use.
+- *Latency/cost* — MiniLM is instant and free locally; API models add network
+  latency and per-call cost. For a class project the quality gain doesn't justify
+  it, but at scale I'd accept latency for accuracy.
 
+**Why semantic search works without shared words:** embeddings map *meaning* to
+nearby vectors, so a query "which classes are hard" matches a review that says
+"brutal, everyone fails" even with zero shared words — the model learned those
+phrases occupy similar regions of vector space.
 **Production tradeoff reflection:**
 
 ---
 
 ## Evaluation Plan
 
-<!-- List your 5 test questions with their expected correct answers.
-     Questions should be specific enough that you can judge whether the system's response
-     is right or wrong. "What are good dining halls?" is too vague.
-     "What do students say about wait times at [dining hall name] during lunch?" is testable. -->
+1. Q: "What is the average difficulty rating of CS010A?"
+   Expected: 3.38 (tests the per-class summary chunk + numeric retrieval).
 
-| # | Question | Expected answer |
-|---|----------|-----------------|
-| 1 | | |
-| 2 | | |
-| 3 | | |
-| 4 | | |
-| 5 | | |
+2. Q: "What is the average difficulty of BIOL005B, and why do students consider
+   it hard?"
+   Expected: 7.59; heavy memorization, animal/plant diversity, known weeder
+   course, several reviews say to avoid Prof. Chappell.
 
----
+3. Q: "Which professor do reviewers repeatedly warn against taking for CHEM001A?"
+   Expected: Ludwig Bartels — multiple reviews explicitly say "AVOID BARTELS"
+   (free-response exams, teaches beyond intro scope, harsh grading).
+
+4. Q: "According to reviews, what makes CS061 difficult to pass?"
+   Expected: it's a weeder course; LC-3 assembly, data paths, register transfer
+   notation; must score ≥70% on the final or fail; time-consuming labs/projects.
+
+5. Q: "Which professor is recommended as the easiest for CS008?"
+   Expected: Toby Gustafson — reviews say he posts lectures, tells you what's on
+   the exam, attendance optional, easy A.
 
 ## Anticipated Challenges
 
-<!-- What could go wrong? Name at least two specific risks with reasoning.
-     Consider: noisy or inconsistent documents, missing source attribution, off-topic
-     retrieval, chunks that split key information across boundaries. -->
+1. **Blank class codes on continuation rows.** In the CSV, only the first review
+   for each class has the class code; subsequent reviews leave that column empty
+   and inherit it from the row above. If I chunk naively per row, every empty-code
+   review loses its class identity and becomes unretrievable/misattributed.
+   Mitigation: forward-fill the class code down empty rows during preprocessing.
 
-1.
+2. **Contradictory reviews within one class.** A single class can have ratings
+   from 1 to 10 and opposite opinions (often about different professors or years).
+   The LLM may present one cherry-picked review as fact. Mitigation: retrieve
+   several chunks (top-k 6) and prompt the model to report the range/consensus and
+   note disagreement rather than asserting a single answer.
 
-2.
+3. **Cross-class contamination.** Generic phrases like "avoid this professor,
+   weeder class" appear across many classes, so semantic search can pull reviews
+   from the wrong class. Mitigation: metadata-filter by class code when the query
+   names one.
 
----
+4. **Truncation of long reviews.** Essay-length reviews exceed MiniLM's 256-token
+   limit and get silently cut, losing later content. Mitigation: split oversized
+   reviews into capped sub-chunks with small overlap.
+
+5. **Stale information.** Reviews span 2017–2025; professors leave and courses
+   change. Including the date in each chunk lets the model weight or caveat
+   recency.
 
 ## Architecture
 
