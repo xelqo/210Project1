@@ -9,7 +9,7 @@
 
 ## Domain
 
-<!-- What domain did you choose? Why is this knowledge valuable and hard to find through official channels? -->
+The domain I choose is course difficulty at UCR. This kind of thing is hard to come by because it may be hard to get a good sense of how difficult a class is based on the universities description, having accounts from people who actaully took the class is more valueable.
 
 ---
 
