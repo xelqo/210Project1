@@ -150,16 +150,29 @@ phrases occupy similar regions of vector space.
 
 ## AI Tool Plan
 
-<!-- For each part of the pipeline below, describe:
-     - Which AI tool you plan to use (Claude, Copilot, ChatGPT, etc.)
-     - What you'll give it as input (which sections of this planning.md, which requirements)
-     - What you expect it to produce
-     - How you'll verify the output matches your spec
+- **Preprocessing / data cleaning:** I'll give Claude the raw CSV schema and the
+  "blank class codes" challenge from this doc, and ask it to write a pandas script
+  that forward-fills the class code, strips empty rows, and outputs clean records
+  of {class_code, avg_difficulty, rating, review_text, date}.
 
-     "I'll use AI to help me code" is not a plan.
-     "I'll give Claude my Chunking Strategy section and ask it to implement chunk_text()
-     with my specified chunk size and overlap" is a plan. -->
+- **Chunking:** I'll give Claude my Chunking Strategy section and ask it to
+  implement chunk_text() — one chunk per review with the metadata prefix, the
+  256-token cap with ~40-token overlap on oversized reviews, plus a function that
+  emits one summary chunk per class.
 
+- **Embedding + index:** I'll give Claude my Retrieval Approach section and ask it
+  to write the code that embeds chunks with all-MiniLM-L6-v2 (sentence-
+  transformers) and builds a searchable vector index (e.g. FAISS), including the
+  class-code metadata filter.
+
+- **Retrieval + generation:** I'll ask Claude to write the query function that
+  embeds the question, retrieves top-k 6 (filtered by class if one is named), and
+  builds the LLM prompt, instructing it to cite class codes and report opinion
+  spread rather than a single review.
+
+- **Evaluation:** I'll give Claude my 5 eval questions + expected answers and ask
+  it to write a harness that runs each question through the pipeline and prints
+  the retrieved chunks alongside the generated answer so I can grade correctness.
 **Milestone 3 — Ingestion and chunking:**
 
 **Milestone 4 — Embedding and retrieval:**
