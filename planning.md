@@ -139,12 +139,49 @@ phrases occupy similar regions of vector space.
    recency.
 
 ## Architecture
-
-<!-- Draw a diagram of your pipeline showing the five stages:
-     Document Ingestion → Chunking → Embedding + Vector Store → Retrieval → Generation
-     Label each stage with the tool or library you're using.
-     You can use ASCII art, a Mermaid diagram, or embed a sketch as an image.
-     You'll use this diagram as context when prompting AI tools to implement each stage. -->
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1. DOCUMENT INGESTION                                  pandas         │
+│    Read UCR class-difficulty CSV                                      │
+│    • forward-fill blank class codes onto continuation rows           │
+│    • drop empty rows                                                  │
+│    → records: {class_code, avg_difficulty, rating, review, date}     │
+└───────────────────────────────┬─────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 2. CHUNKING                                            custom Python  │
+│    One chunk per review (row-based, not fixed-length)                │
+│    • prefix each chunk w/ metadata (class, rating, avg, date)        │
+│    • cap ~256 tokens; split oversized reviews w/ ~40-tok overlap     │
+│    • + one summary chunk per class (code + avg + review count)       │
+└───────────────────────────────┬─────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 3. EMBEDDING + VECTOR STORE      sentence-transformers (MiniLM-L6-v2) │
+│                                                          + FAISS      │
+│    • embed each chunk → 384-dim vector                               │
+│    • store vectors + metadata in FAISS index                        │
+└───────────────────────────────┬─────────────────────────────────────┘
+│
+┌─────────────────┘
+│  user query
+▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 4. RETRIEVAL                     sentence-transformers + FAISS        │
+│    • embed query with same model                                    │
+│    • optional metadata filter by class_code if query names one      │
+│    • return top-k = 6 nearest chunks                                 │
+└───────────────────────────────┬─────────────────────────────────────┘
+│  query + retrieved chunks
+▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 5. GENERATION                                          LLM (Claude)   │
+│    • build prompt: question + retrieved chunks                      │
+│    • instruct: cite class codes, report opinion spread/range,       │
+│      don't assert a single review as fact                           │
+│    → grounded answer                                                 │
+└─────────────────────────────────────────────────────────────────────┘
 
 ---
 
