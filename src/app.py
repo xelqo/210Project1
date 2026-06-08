@@ -54,25 +54,22 @@ def build_ui() -> gr.Blocks:
             "database — if the reviews don't cover it, the system says so."
         )
         with gr.Row():
-            # Single-line so pressing Enter submits; multi-line textareas swallow
-            # Enter as a newline and the .submit() event never fires.
-            query = gr.Textbox(label="Your question", lines=1, scale=4,
-                               interactive=True, autofocus=True, submit_btn=True,
-                               placeholder="e.g. why is BIOL005B so hard?  (press Enter or click Ask)")
-            ask = gr.Button("Ask", variant="primary", scale=1)
-        with gr.Row():
-            k = gr.Slider(1, 10, value=R.TOP_K, step=1, label="Chunks to retrieve (top-k)")
-            use_filter = gr.Checkbox(value=True, label="Filter by class code when named")
+            with gr.Column(scale=3):
+                query = gr.Textbox(label="Your question", lines=2,
+                                   placeholder="e.g. why is BIOL005B so hard?")
+            with gr.Column(scale=1):
+                k = gr.Slider(1, 10, value=R.TOP_K, step=1, label="Chunks to retrieve (top-k)")
+                use_filter = gr.Checkbox(value=True, label="Filter by class code when named")
+        ask = gr.Button("Ask", variant="primary")
 
-        answer = gr.Markdown(value="*Ask a question to see an answer here.*")
+        answer = gr.Markdown(label="Answer")
         with gr.Accordion("Show retrieved chunks", open=False):
             chunks = gr.Markdown()
 
-        gr.Examples(examples=EXAMPLES, inputs=query, label="Example questions (click to fill)")
+        gr.Examples(examples=EXAMPLES, inputs=query)
 
-        # Wire every way of submitting to the same handler.
-        for trigger in (ask.click, query.submit):
-            trigger(answer_question, inputs=[query, k, use_filter], outputs=[answer, chunks])
+        ask.click(answer_question, inputs=[query, k, use_filter], outputs=[answer, chunks])
+        query.submit(answer_question, inputs=[query, k, use_filter], outputs=[answer, chunks])
     return demo
 
 
